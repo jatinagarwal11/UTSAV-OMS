@@ -15,6 +15,7 @@ export default function AdminOrders() {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [actionError, setActionError] = useState('');
 
   const loadOrders = async () => {
     const { data } = await supabase
@@ -33,27 +34,33 @@ export default function AdminOrders() {
     if (cancelling || order.status === 'PAID' || order.status === 'CANCELLED') return;
 
     setCancelling(true);
+    setActionError('');
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('orders')
         .update({ status: 'CANCELLED' })
-        .eq('id', order.id);
+        .eq('id', order.id)
+        .select('id')
+        .maybeSingle();
 
-      if (!error) {
-        await supabase.from('audit_logs').insert({
-          action: 'ORDER_CANCELLED',
-          details: { order_id: order.id, role: 'admin' },
-        });
+      if (error || !data) {
+        setActionError(error?.message || 'Unable to cancel this order.');
+        return;
+      }
 
-        const refreshed = await supabase
-          .from('orders')
-          .select('*, salesperson:profiles!salesperson_id(name), order_items(*, product:products(*)), invoices(*, payments(*))')
-          .eq('id', order.id)
-          .single();
+      await supabase.from('audit_logs').insert({
+        action: 'ORDER_CANCELLED',
+        details: { order_id: order.id, role: 'admin' },
+      });
 
-        if (refreshed.data) {
-          setSelectedOrder(refreshed.data);
-        }
+      const refreshed = await supabase
+        .from('orders')
+        .select('*, salesperson:profiles!salesperson_id(name), order_items(*, product:products(*)), invoices(*, payments(*))')
+        .eq('id', order.id)
+        .single();
+
+      if (refreshed.data) {
+        setSelectedOrder(refreshed.data);
       }
 
       await loadOrders();
@@ -87,6 +94,10 @@ export default function AdminOrders() {
         <h2 className="text-lg font-semibold">All Orders</h2>
         <p className="text-xs text-[var(--text-tertiary)]">{filtered.length} orders</p>
       </div>
+
+      {actionError && (
+        <p className="text-xs text-[var(--danger)] mb-3">{actionError}</p>
+      )}
 
       <div className="flex gap-1 flex-wrap mb-4">
         {statuses.map((s) => (

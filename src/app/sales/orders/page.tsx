@@ -15,6 +15,7 @@ export default function SalesOrders() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState('');
 
   const loadOrders = async () => {
     if (!profile) {
@@ -56,20 +57,29 @@ export default function SalesOrders() {
     if (!profile || cancellingOrderId) return;
 
     setCancellingOrderId(order.id);
+    setActionError('');
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('orders')
         .update({ status: 'CANCELLED' })
         .eq('id', order.id)
-        .eq('salesperson_id', profile.id);
+        .eq('salesperson_id', profile.id)
+        .select('id')
+        .maybeSingle();
 
-      if (!error) {
-        await supabase.from('audit_logs').insert({
-          user_id: profile.id,
-          action: 'ORDER_CANCELLED',
-          details: { order_id: order.id, role: 'sales' },
-        });
+      if (error || !data) {
+        setActionError(
+          error?.message
+            || 'Unable to cancel this order. Sales can only cancel their own DRAFT/CONFIRMED orders.',
+        );
+        return;
       }
+
+      await supabase.from('audit_logs').insert({
+        user_id: profile.id,
+        action: 'ORDER_CANCELLED',
+        details: { order_id: order.id, role: 'sales' },
+      });
       await loadOrders();
     } finally {
       setCancellingOrderId(null);
@@ -86,6 +96,10 @@ export default function SalesOrders() {
   return (
     <div>
       <h2 className="text-lg font-semibold mb-6">My Orders</h2>
+
+      {actionError && (
+        <p className="text-xs text-[var(--danger)] mb-3">{actionError}</p>
+      )}
 
       {orders.length === 0 ? (
         <p className="text-sm text-[var(--text-tertiary)]">No orders yet.</p>

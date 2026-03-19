@@ -216,25 +216,34 @@ export default function AccountsScanBill() {
     if (!order || saving || order.status === 'PAID' || order.status === 'CANCELLED') return;
 
     setSaving(true);
+    setSearchError('');
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('orders')
         .update({ status: 'CANCELLED' })
-        .eq('id', order.id);
+        .eq('id', order.id)
+        .select('id')
+        .maybeSingle();
 
-      if (!error) {
-        await supabase.from('audit_logs').insert({
-          user_id: profile?.id,
-          action: 'ORDER_CANCELLED',
-          details: { order_id: order.id, role: 'accounts' },
-        });
-
-        const updatedOrder = { ...order, status: 'CANCELLED' as Order['status'] };
-        setOrder(updatedOrder);
-        setAllOrders((prev) => prev.map((o) => (
-          o.id === order.id ? { ...o, status: 'CANCELLED' } : o
-        )));
+      if (error || !data) {
+        setSearchError(
+          error?.message
+            || 'Unable to cancel this order. Accounts can cancel only allowed statuses.',
+        );
+        return;
       }
+
+      await supabase.from('audit_logs').insert({
+        user_id: profile?.id,
+        action: 'ORDER_CANCELLED',
+        details: { order_id: order.id, role: 'accounts' },
+      });
+
+      const updatedOrder = { ...order, status: 'CANCELLED' as Order['status'] };
+      setOrder(updatedOrder);
+      setAllOrders((prev) => prev.map((o) => (
+        o.id === order.id ? { ...o, status: 'CANCELLED' } : o
+      )));
     } finally {
       setSaving(false);
     }
