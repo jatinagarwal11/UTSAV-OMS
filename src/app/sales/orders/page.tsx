@@ -63,7 +63,7 @@ export default function SalesOrders() {
         .from('orders')
         .update({ status: 'CANCELLED' })
         .eq('id', order.id)
-        .eq('salesperson_id', profile.id)
+        .in('status', ['DRAFT', 'CONFIRMED'])
         .select('id')
         .maybeSingle();
 
