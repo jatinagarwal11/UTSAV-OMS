@@ -237,17 +237,28 @@ create policy "Admin can manage recipes"
   on public.recipes for all using (public.get_my_role() = 'admin');
 
 -- ── ORDERS policies ────────────────────────────────────────
+drop policy if exists "Sales sees own orders" on public.orders;
+drop policy if exists "Sales can create orders" on public.orders;
+drop policy if exists "Kitchen can update order status" on public.orders;
+drop policy if exists "Sales can cancel own orders" on public.orders;
+drop policy if exists "Admin full access orders" on public.orders;
+
 create policy "Sales sees own orders"
   on public.orders for select using (
     salesperson_id = auth.uid() or public.get_my_role() in ('admin','kitchen','accounts')
   );
-create policy "Sales can create orders"
+create policy "Sales can create own orders"
   on public.orders for insert with check (
-    public.get_my_role() in ('sales','accounts','admin')
+    public.get_my_role() = 'sales'
+    and salesperson_id = auth.uid()
   );
-create policy "Kitchen can update order status"
+create policy "Accounts and admin can create orders"
+  on public.orders for insert with check (
+    public.get_my_role() in ('accounts','admin')
+  );
+create policy "Kitchen and accounts can update orders"
   on public.orders for update using (
-    public.get_my_role() in ('kitchen','admin','accounts')
+    public.get_my_role() in ('kitchen','accounts')
   );
 create policy "Sales can cancel own orders"
   on public.orders for update
@@ -263,6 +274,60 @@ create policy "Sales can cancel own orders"
 create policy "Admin full access orders"
   on public.orders for all using (public.get_my_role() = 'admin');
 
+-- Guard status transitions by role to prevent privilege escalation via direct API calls
+create or replace function public.enforce_order_status_transition()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  role_text text := coalesce(public.get_my_role()::text, '');
+  actor_id uuid := auth.uid();
+begin
+  if auth.role() = 'service_role' or role_text = 'admin' then
+    return new;
+  end if;
+
+  if new.status = old.status then
+    return new;
+  end if;
+
+  if role_text = 'kitchen' then
+    if (old.status = 'CONFIRMED' and new.status = 'IN_PRODUCTION')
+       or (old.status = 'IN_PRODUCTION' and new.status = 'READY') then
+      return new;
+    end if;
+    raise exception 'Kitchen can only move CONFIRMED->IN_PRODUCTION or IN_PRODUCTION->READY';
+  end if;
+
+  if role_text = 'accounts' then
+    if (old.status = 'READY' and new.status = 'BILLED')
+       or (old.status = 'BILLED' and new.status = 'PAID')
+       or (old.status in ('CONFIRMED','IN_PRODUCTION','READY','BILLED') and new.status = 'CANCELLED') then
+      return new;
+    end if;
+    raise exception 'Accounts status transition not allowed';
+  end if;
+
+  if role_text = 'sales' then
+    if actor_id = old.salesperson_id
+       and old.status in ('DRAFT','CONFIRMED')
+       and new.status = 'CANCELLED' then
+      return new;
+    end if;
+    raise exception 'Sales can only cancel own DRAFT or CONFIRMED orders';
+  end if;
+
+  raise exception 'Order status update not allowed for this role';
+end;
+$$;
+
+drop trigger if exists trg_orders_status_guard on public.orders;
+create trigger trg_orders_status_guard
+  before update on public.orders
+  for each row execute function public.enforce_order_status_transition();
+
 -- Ensure CANCELLED exists in existing projects where enum was already created
 do $$
 begin
@@ -272,8 +337,21 @@ exception
 end $$;
 
 -- ── ORDER ITEMS policies ───────────────────────────────────
+drop policy if exists "Read order items" on public.order_items;
+drop policy if exists "Insert order items" on public.order_items;
+drop policy if exists "Admin manage order items" on public.order_items;
+
 create policy "Read order items"
-  on public.order_items for select using (true);
+  on public.order_items for select using (
+    exists (
+      select 1 from public.orders o
+      where o.id = order_id
+        and (
+          o.salesperson_id = auth.uid()
+          or public.get_my_role() in ('admin','accounts','kitchen')
+        )
+    )
+  );
 create policy "Insert order items"
   on public.order_items for insert with check (
     public.get_my_role() in ('sales','accounts','admin')
@@ -282,24 +360,57 @@ create policy "Admin manage order items"
   on public.order_items for all using (public.get_my_role() = 'admin');
 
 -- ── INVOICES policies ──────────────────────────────────────
+drop policy if exists "Read invoices" on public.invoices;
+drop policy if exists "Accounts can manage invoices" on public.invoices;
+
 create policy "Read invoices"
-  on public.invoices for select using (true);
+  on public.invoices for select using (
+    public.get_my_role() in ('admin','accounts')
+    or exists (
+      select 1
+      from public.orders o
+      where o.id = invoices.order_id
+        and o.salesperson_id = auth.uid()
+    )
+  );
 create policy "Accounts can manage invoices"
   on public.invoices for all using (
     public.get_my_role() in ('accounts','admin')
   );
 
 -- ── PAYMENTS policies ──────────────────────────────────────
+drop policy if exists "Read payments" on public.payments;
+drop policy if exists "Accounts can manage payments" on public.payments;
+
 create policy "Read payments"
-  on public.payments for select using (true);
+  on public.payments for select using (
+    public.get_my_role() in ('admin','accounts')
+    or exists (
+      select 1
+      from public.invoices i
+      join public.orders o on o.id = i.order_id
+      where i.id = payments.invoice_id
+        and o.salesperson_id = auth.uid()
+    )
+  );
 create policy "Accounts can manage payments"
   on public.payments for all using (
     public.get_my_role() in ('accounts','admin')
   );
 
 -- ── AUDIT LOGS policies ────────────────────────────────────
+drop policy if exists "Anyone can insert audit logs" on public.audit_logs;
+drop policy if exists "Admin can read audit logs" on public.audit_logs;
+
 create policy "Anyone can insert audit logs"
-  on public.audit_logs for insert with check (true);
+  on public.audit_logs for insert with check (
+    auth.uid() is not null
+    and (
+      user_id is null
+      or user_id = auth.uid()
+      or public.get_my_role() = 'admin'
+    )
+  );
 create policy "Admin can read audit logs"
   on public.audit_logs for select using (public.get_my_role() = 'admin');
 

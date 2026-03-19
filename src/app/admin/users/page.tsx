@@ -10,6 +10,9 @@ export default function AdminUsers() {
   const [users, setUsers] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [page, setPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+  const PAGE_SIZE = 50;
   const [modalOpen, setModalOpen] = useState(false);
 
   // New user form
@@ -23,14 +26,24 @@ export default function AdminUsers() {
   const [success, setSuccess] = useState('');
   const [updatingCommissionId, setUpdatingCommissionId] = useState<string | null>(null);
 
-  const load = async () => {
-    const { data, error: queryError } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
+  const load = async (nextPage = page) => {
+    const from = (nextPage - 1) * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
+
+    const { data, count, error: queryError } = await supabase
+      .from('profiles')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
     if (queryError) {
       setLoadError(queryError.message || 'Unable to load users.');
       setUsers([]);
     } else {
       setLoadError('');
       setUsers(data || []);
+      setTotalCount(count || 0);
+      setPage(nextPage);
     }
     setLoading(false);
   };
@@ -44,7 +57,11 @@ export default function AdminUsers() {
     setSuccess('');
 
     const commissionValue = commissionPercent.trim() === '' ? null : Number(commissionPercent);
-    if (role === 'sales' && commissionPercent.trim() !== '' && (Number.isNaN(commissionValue) || commissionValue! < 0 || commissionValue! > 100)) {
+    if (
+      role === 'sales'
+      && commissionPercent.trim() !== ''
+      && (commissionValue === null || Number.isNaN(commissionValue) || commissionValue < 0 || commissionValue > 100)
+    ) {
       setError('Commission must be between 0 and 100.');
       setSaving(false);
       return;
@@ -68,7 +85,6 @@ export default function AdminUsers() {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         setError(payload?.error || 'Unable to create user.');
-        setSaving(false);
         return;
       }
 
@@ -79,7 +95,7 @@ export default function AdminUsers() {
       setPassword('');
       setRole('sales');
       setCommissionPercent('');
-      await load();
+      await load(1);
     } catch {
       setError('Unable to create user right now. Please try again.');
     } finally {
@@ -99,12 +115,12 @@ export default function AdminUsers() {
       .update({ commission_percent: parsed })
       .eq('id', user.id);
     setUpdatingCommissionId(null);
-    load();
+    load(page);
   };
 
   const toggleActive = async (user: Profile) => {
     await supabase.from('profiles').update({ is_active: !user.is_active }).eq('id', user.id);
-    load();
+    load(page);
   };
 
   const roleColors: Record<UserRole, string> = {
@@ -116,11 +132,26 @@ export default function AdminUsers() {
 
   if (loading) return <PageLoader />;
 
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-lg font-semibold">Users</h2>
         <Button size="sm" onClick={() => setModalOpen(true)}>+ User</Button>
+      </div>
+
+      <div className="mb-3 flex items-center justify-between text-xs text-[var(--text-tertiary)]">
+        <span>{totalCount} users</span>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={() => load(page - 1)} disabled={page <= 1}>
+            Prev
+          </Button>
+          <span>Page {page} / {totalPages}</span>
+          <Button variant="secondary" size="sm" onClick={() => load(page + 1)} disabled={page >= totalPages}>
+            Next
+          </Button>
+        </div>
       </div>
 
       {loadError && (

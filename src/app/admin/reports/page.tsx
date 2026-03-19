@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
 import { Button, PageLoader } from '@/components/ui';
 import { format } from 'date-fns';
 
@@ -30,198 +29,41 @@ interface SalesReport {
     estimatedCommission: number;
     potentialCommission: number;
   }[];
-}
-
-interface ReportOrder {
-  id: string;
-  order_number: number;
-  customer_name: string;
-  created_at: string;
-  status: string;
-  salesperson_id: string;
-  salesperson?: { name: string } | null;
-  order_items?: { price: number; quantity: number }[];
-  invoices?: { total: number; status: string; discount: number; vat: number }[];
-}
-
-interface ReportProfile {
-  id: string;
-  name: string;
-  commission_percent: number | null;
+  exportData: Record<string, unknown>[];
 }
 
 export default function AdminReports() {
-  const supabase = createClient();
   const [report, setReport] = useState<SalesReport | null>(null);
   const [loading, setLoading] = useState(true);
-  const [exportData, setExportData] = useState<Record<string, unknown>[]>([]);
+  const [error, setError] = useState('');
+  const [days, setDays] = useState(30);
 
   useEffect(() => {
     const load = async () => {
-      const [{ data: invoices }, { data: orders }, { data: profiles }, { data: appSettings }] = await Promise.all([
-        supabase.from('invoices').select('*'),
-        supabase.from('orders').select('*, salesperson:profiles!salesperson_id(name), order_items(price, quantity), invoices(total, status, discount, vat)'),
-        supabase.from('profiles').select('id, name, commission_percent').eq('role', 'sales'),
-        supabase.from('app_settings').select('commission_percent').eq('id', 1).maybeSingle(),
-      ]);
+      setLoading(true);
+      setError('');
 
-      const inv = invoices || [];
-      const ords = (orders || []) as ReportOrder[];
-      const profs = (profiles || []) as ReportProfile[];
-      const defaultCommissionPercent = Number(appSettings?.commission_percent ?? 5);
-
-      const paidInvoices = inv.filter(i => i.status === 'paid');
-      const unpaidInvoices = inv.filter(i => i.status !== 'paid');
-
-      // Orders by date
-      const dateMap = new Map<string, { count: number; revenue: number }>();
-      ords.forEach((o) => {
-        const d = format(new Date(o.created_at), 'yyyy-MM-dd');
-        const existing = dateMap.get(d) || { count: 0, revenue: 0 };
-        const orderTotal = o.order_items?.reduce((s: number, i: { price: number; quantity: number }) => s + i.price * i.quantity, 0) || 0;
-        dateMap.set(d, { count: existing.count + 1, revenue: existing.revenue + orderTotal });
-      });
-
-      // Orders by salesperson
-      const spMap = new Map<string, { name: string; count: number; revenue: number }>();
-      ords.forEach((o) => {
-        const sp = o.salesperson as unknown as { name: string } | null;
-        const spName = sp?.name || 'Unknown';
-        const existing = spMap.get(spName) || { name: spName, count: 0, revenue: 0 };
-        const orderTotal = o.order_items?.reduce((s: number, i: { price: number; quantity: number }) => s + i.price * i.quantity, 0) || 0;
-        spMap.set(spName, { name: spName, count: existing.count + 1, revenue: existing.revenue + orderTotal });
-      });
-
-      // Detailed salesperson performance for admin portal
-      const performanceMap = new Map<string, {
-        id: string;
-        name: string;
-        commissionPercent: number;
-        ordersCount: number;
-        cancelledOrders: number;
-        invoicedOrders: number;
-        uninvoicedOrders: number;
-        grossSales: number;
-        paidSales: number;
-        unpaidSales: number;
-        partialSales: number;
-      }>();
-
-      profs.forEach((p) => {
-        performanceMap.set(p.id, {
-          id: p.id,
-          name: p.name,
-          commissionPercent: Number(p.commission_percent ?? defaultCommissionPercent),
-          ordersCount: 0,
-          cancelledOrders: 0,
-          invoicedOrders: 0,
-          uninvoicedOrders: 0,
-          grossSales: 0,
-          paidSales: 0,
-          unpaidSales: 0,
-          partialSales: 0,
-        });
-      });
-
-      ords.forEach((o) => {
-        const salespersonId = o.salesperson_id || 'unknown';
-        const salespersonName = (o.salesperson as unknown as { name: string } | null)?.name || 'Unknown';
-
-        if (!performanceMap.has(salespersonId)) {
-          performanceMap.set(salespersonId, {
-            id: salespersonId,
-            name: salespersonName,
-            commissionPercent: defaultCommissionPercent,
-            ordersCount: 0,
-            cancelledOrders: 0,
-            invoicedOrders: 0,
-            uninvoicedOrders: 0,
-            grossSales: 0,
-            paidSales: 0,
-            unpaidSales: 0,
-            partialSales: 0,
-          });
-        }
-
-        const bucket = performanceMap.get(salespersonId);
-        if (!bucket) return;
-
-        bucket.ordersCount += 1;
-        if (o.status === 'CANCELLED') {
-          bucket.cancelledOrders += 1;
-          return;
-        }
-
-        const itemTotal = o.order_items?.reduce((s: number, i: { price: number; quantity: number }) => s + i.price * i.quantity, 0) || 0;
-        const invoice = o.invoices?.[0];
-        const saleValue = Number(invoice?.total ?? itemTotal);
-
-        bucket.grossSales += saleValue;
-
-        if (!invoice) {
-          bucket.uninvoicedOrders += 1;
-          return;
-        }
-
-        bucket.invoicedOrders += 1;
-        if (invoice.status === 'paid') {
-          bucket.paidSales += saleValue;
-        } else if (invoice.status === 'partial') {
-          bucket.partialSales += saleValue;
+      try {
+        const response = await fetch(`/api/admin/reports?days=${days}`, { cache: 'no-store' });
+        const payload = await response.json();
+        if (!response.ok) {
+          setError(payload?.error || 'Unable to load reports.');
+          setReport(null);
         } else {
-          bucket.unpaidSales += saleValue;
+          setReport(payload as SalesReport);
         }
-      });
-
-      const salespersonPerformance = Array.from(performanceMap.values())
-        .map((p) => {
-          const estimatedCommission = (p.paidSales * p.commissionPercent) / 100;
-          const potentialCommission = ((p.paidSales + p.partialSales + p.unpaidSales) * p.commissionPercent) / 100;
-          return {
-            ...p,
-            estimatedCommission,
-            potentialCommission,
-          };
-        })
-        .sort((a, b) => b.grossSales - a.grossSales);
-
-      setReport({
-        totalRevenue: paidInvoices.reduce((s, i) => s + Number(i.total), 0),
-        totalOrders: ords.length,
-        avgOrderValue: ords.length > 0 ? paidInvoices.reduce((s, i) => s + Number(i.total), 0) / Math.max(paidInvoices.length, 1) : 0,
-        paidTotal: paidInvoices.reduce((s, i) => s + Number(i.total), 0),
-        unpaidTotal: unpaidInvoices.reduce((s, i) => s + Number(i.total), 0),
-        discountsGiven: inv.reduce((s, i) => s + Number(i.discount), 0),
-        vatCollected: inv.reduce((s, i) => s + Number(i.vat), 0),
-        ordersByDate: Array.from(dateMap.entries()).map(([date, d]) => ({ date, ...d })).sort((a, b) => b.date.localeCompare(a.date)),
-        ordersBySalesperson: Array.from(spMap.values()).sort((a, b) => b.revenue - a.revenue),
-        salespersonPerformance,
-      });
-
-      // Prepare export data
-      setExportData(ords.map((o) => {
-        const inv = o.invoices?.[0];
-        const total = o.order_items?.reduce((s: number, i: { price: number; quantity: number }) => s + i.price * i.quantity, 0) || 0;
-        return {
-          'Order #': o.order_number,
-          'Customer': o.customer_name,
-          'Salesperson': (o.salesperson as unknown as { name: string })?.name || '',
-          'Items Total': total,
-          'Discount': inv?.discount || 0,
-          'VAT': inv?.vat || 0,
-          'Final Amount': inv?.total || total,
-          'Payment Status': inv?.status || 'no invoice',
-          'Status': o.status,
-          'Date': format(new Date(o.created_at), 'yyyy-MM-dd HH:mm'),
-        };
-      }));
-
-      setLoading(false);
+      } catch {
+        setError('Unable to load reports right now.');
+        setReport(null);
+      } finally {
+        setLoading(false);
+      }
     };
     load();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [days]);
 
   const exportCSV = () => {
+    const exportData = report?.exportData || [];
     if (exportData.length === 0) return;
     const headers = Object.keys(exportData[0]);
     const rows = exportData.map((row) =>
@@ -241,7 +83,16 @@ export default function AdminReports() {
   };
 
   if (loading) return <PageLoader />;
-  if (!report) return null;
+  if (!report) {
+    return (
+      <div className="space-y-3">
+        <p className="text-sm text-[var(--danger)]">{error || 'Unable to load reports.'}</p>
+        <Button variant="secondary" size="sm" onClick={() => window.location.reload()}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
 
   const summaryCards = [
     { label: 'Total Revenue', value: `₹${report.totalRevenue.toLocaleString()}` },
@@ -257,9 +108,24 @@ export default function AdminReports() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-lg font-semibold">Reports</h2>
-        <Button variant="secondary" size="sm" onClick={exportCSV}>
-          Export CSV
-        </Button>
+        <div className="flex items-center gap-2">
+          {[7, 30, 90].map((d) => (
+            <button
+              key={d}
+              onClick={() => setDays(d)}
+              className={`px-2.5 py-1 text-xs rounded border ${
+                days === d
+                  ? 'bg-[var(--accent)] text-[var(--accent-text)] border-[var(--accent)]'
+                  : 'border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
+              }`}
+            >
+              {d}d
+            </button>
+          ))}
+          <Button variant="secondary" size="sm" onClick={exportCSV}>
+            Export CSV
+          </Button>
+        </div>
       </div>
 
       {/* Summary cards */}

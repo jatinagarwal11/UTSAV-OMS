@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/components/auth-provider';
 import { Button, PageLoader } from '@/components/ui';
@@ -31,6 +31,7 @@ export default function KitchenDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<OrderStatus>('CONFIRMED');
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getDayRange = (date: string) => {
     const start = new Date(`${date}T00:00:00`);
@@ -96,6 +97,15 @@ export default function KitchenDashboard() {
   };
 
   useEffect(() => {
+    const scheduleRefresh = () => {
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+      }
+      refreshTimerRef.current = setTimeout(() => {
+        Promise.all([loadOrders(), loadDailyBatches()]).catch(() => undefined);
+      }, 250);
+    };
+
     const init = async () => {
       await Promise.all([loadOrders(), loadRecipes(), loadDailyBatches()]);
     };
@@ -103,12 +113,15 @@ export default function KitchenDashboard() {
 
     const channel = supabase
       .channel('kitchen-orders')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, async () => {
-        await Promise.all([loadOrders(), loadDailyBatches()]);
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => scheduleRefresh())
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
+    return () => {
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+      }
+      supabase.removeChannel(channel);
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateStatus = async (orderId: string, status: OrderStatus) => {
