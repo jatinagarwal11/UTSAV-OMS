@@ -9,6 +9,7 @@ export default function AdminUsers() {
   const supabase = createClient();
   const [users, setUsers] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
 
   // New user form
@@ -19,11 +20,18 @@ export default function AdminUsers() {
   const [commissionPercent, setCommissionPercent] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [updatingCommissionId, setUpdatingCommissionId] = useState<string | null>(null);
 
   const load = async () => {
-    const { data } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
-    setUsers(data || []);
+    const { data, error: queryError } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
+    if (queryError) {
+      setLoadError(queryError.message || 'Unable to load users.');
+      setUsers([]);
+    } else {
+      setLoadError('');
+      setUsers(data || []);
+    }
     setLoading(false);
   };
 
@@ -33,6 +41,7 @@ export default function AdminUsers() {
     if (!email.trim() || !name.trim() || !password) return;
     setSaving(true);
     setError('');
+    setSuccess('');
 
     const commissionValue = commissionPercent.trim() === '' ? null : Number(commissionPercent);
     if (role === 'sales' && commissionPercent.trim() !== '' && (Number.isNaN(commissionValue) || commissionValue! < 0 || commissionValue! > 100)) {
@@ -41,39 +50,41 @@ export default function AdminUsers() {
       return;
     }
 
-    // Create user via Supabase admin API (client-side fallback: signUp)
-    const { data: authData, error: authError } = await supabase.auth.signUp({
-      email: email.trim(),
-      password,
-      options: { data: { name: name.trim(), role } },
-    });
-
-    if (authError) {
-      setError(authError.message);
-      setSaving(false);
-      return;
-    }
-
-    if (authData.user) {
-      // Insert profile
-      await supabase.from('profiles').upsert({
-        id: authData.user.id,
-        name: name.trim(),
-        email: email.trim(),
-        role,
-        commission_percent: role === 'sales' ? commissionValue : null,
-        is_active: true,
+    try {
+      const response = await fetch('/api/admin/create-user', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: email.trim(),
+          name: name.trim(),
+          password,
+          role,
+          commissionPercent: role === 'sales' ? commissionValue : null,
+        }),
       });
-    }
 
-    setSaving(false);
-    setModalOpen(false);
-    setEmail('');
-    setName('');
-    setPassword('');
-    setRole('sales');
-    setCommissionPercent('');
-    load();
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setError(payload?.error || 'Unable to create user.');
+        setSaving(false);
+        return;
+      }
+
+      setSuccess('User created successfully.');
+      setModalOpen(false);
+      setEmail('');
+      setName('');
+      setPassword('');
+      setRole('sales');
+      setCommissionPercent('');
+      await load();
+    } catch {
+      setError('Unable to create user right now. Please try again.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const updateUserCommission = async (user: Profile, value: string) => {
@@ -111,6 +122,18 @@ export default function AdminUsers() {
         <h2 className="text-lg font-semibold">Users</h2>
         <Button size="sm" onClick={() => setModalOpen(true)}>+ User</Button>
       </div>
+
+      {loadError && (
+        <div className="mb-4 p-3 border border-[var(--danger)]/30 bg-red-50 rounded-md">
+          <p className="text-xs text-[var(--danger)]">{loadError}</p>
+        </div>
+      )}
+
+      {success && (
+        <div className="mb-4 p-3 border border-green-200 bg-green-50 rounded-md">
+          <p className="text-xs text-[var(--success)]">{success}</p>
+        </div>
+      )}
 
       <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-lg overflow-hidden">
         <table className="w-full text-sm">
