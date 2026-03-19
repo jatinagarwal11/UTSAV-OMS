@@ -59,27 +59,19 @@ export default function SalesOrders() {
     setCancellingOrderId(order.id);
     setActionError('');
     try {
-      const { data, error } = await supabase
-        .from('orders')
-        .update({ status: 'CANCELLED' })
-        .eq('id', order.id)
-        .in('status', ['DRAFT', 'CONFIRMED'])
-        .select('id')
-        .maybeSingle();
+      const response = await fetch('/api/orders/cancel', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ orderId: order.id }),
+      });
 
-      if (error || !data) {
-        setActionError(
-          error?.message
-            || 'Unable to cancel this order. Sales can only cancel their own DRAFT/CONFIRMED orders.',
-        );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setActionError(payload?.error || 'Unable to cancel this order.');
         return;
       }
-
-      await supabase.from('audit_logs').insert({
-        user_id: profile.id,
-        action: 'ORDER_CANCELLED',
-        details: { order_id: order.id, role: 'sales' },
-      });
       await loadOrders();
     } finally {
       setCancellingOrderId(null);
