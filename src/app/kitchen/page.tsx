@@ -178,7 +178,7 @@ export default function KitchenDashboard() {
       doc.line(40, y, 555, y);
       y += 16;
 
-      const totals = new Map<string, number>();
+      const totals = new Map<string, { name: string; quantity: number }>();
 
       activeOrders.forEach((order: Order, orderIndex: number) => {
         if (y > pageHeight - 110) {
@@ -202,7 +202,12 @@ export default function KitchenDashboard() {
 
         (order.order_items || []).forEach((item) => {
           const itemName = item.product?.name || 'Item';
-          totals.set(itemName, (totals.get(itemName) || 0) + item.quantity);
+          const key = item.product_id || itemName;
+          const existing = totals.get(key);
+          totals.set(key, {
+            name: itemName,
+            quantity: (existing?.quantity || 0) + item.quantity,
+          });
           doc.text(`- ${itemName}`, 60, y);
           doc.text(`x ${item.quantity}`, 530, y, { align: 'right' });
           y += 12;
@@ -220,24 +225,33 @@ export default function KitchenDashboard() {
         y += 12;
       });
 
-      doc.addPage();
-      y = 48;
+      if (y > pageHeight - 180) {
+        doc.addPage();
+        y = 48;
+      } else {
+        y += 8;
+      }
+
+      doc.setDrawColor(210, 210, 210);
+      doc.line(40, y, 555, y);
+      y += 16;
+
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(14);
-      doc.text('Consolidated Item Totals', 40, y);
+      doc.text('Net Summed Units (All Orders)', 40, y);
       y += 18;
 
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(10);
-      Array.from(totals.entries())
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .forEach(([name, qty]) => {
+      Array.from(totals.values())
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .forEach((entry) => {
           if (y > pageHeight - 40) {
             doc.addPage();
             y = 48;
           }
-          doc.text(name, 40, y);
-          doc.text(String(qty), 530, y, { align: 'right' });
+          doc.text(entry.name, 40, y);
+          doc.text(`${entry.quantity} units`, 530, y, { align: 'right' });
           y += 14;
         });
 
