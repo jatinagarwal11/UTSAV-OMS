@@ -1,6 +1,14 @@
 -- Security and performance hardening migration
 -- Run once in Supabase SQL Editor for existing projects.
 
+-- Ensure CANCELLED exists in existing projects where enum was created earlier
+DO $$
+BEGIN
+  ALTER TYPE order_status ADD VALUE 'CANCELLED';
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
 -- Orders policies
 DROP POLICY IF EXISTS "Sales sees own orders" ON public.orders;
 DROP POLICY IF EXISTS "Sales can create orders" ON public.orders;
